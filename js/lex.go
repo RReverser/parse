@@ -20,7 +20,6 @@ type TokenType uint32
 // TokenType values.
 const (
 	ErrorToken          TokenType = iota // extra token when errors occur
-	UnknownToken                         // extra token when no token can be matched
 	WhitespaceToken                      // space \t \v \f
 	LineTerminatorToken                  // \r \n \r\n
 	CommentToken
@@ -38,8 +37,6 @@ func (tt TokenType) String() string {
 	switch tt {
 	case ErrorToken:
 		return "Error"
-	case UnknownToken:
-		return "Unknown"
 	case WhitespaceToken:
 		return "Whitespace"
 	case LineTerminatorToken:
@@ -91,7 +88,7 @@ func (l *Lexer) Free(n int) {
 
 // Next returns the next Token. It returns ErrorToken when an error was encountered. Using Err() one can retrieve the error message.
 func (l *Lexer) Next() (TokenType, []byte) {
-	tt := UnknownToken
+	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
 	case '(', ')', '[', ']', '{', '}', ';', ',', '~', '?', ':':
@@ -152,13 +149,11 @@ func (l *Lexer) Next() (TokenType, []byte) {
 				}
 				tt = LineTerminatorToken
 			}
-		} else if l.Err() != nil {
-			return ErrorToken, nil
 		}
 	}
 
 	// differentiate between divisor and regexp state, because the '/' character is ambiguous!
-	// ErrorToken, WhitespaceToken and CommentToken are already returned
+	// WhitespaceToken and CommentToken are already returned
 	if tt == LineTerminatorToken || tt == PunctuatorToken && regexpStateByte[c] {
 		l.regexpState = true
 	} else if tt == IdentifierToken {
@@ -175,12 +170,10 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			// errors as we don't attempt to parse a full JS grammar when streaming
 			l.regexpState = true
 		}
+	} else if tt == ErrorToken {
+		return ErrorToken, nil
 	} else {
 		l.regexpState = false
-	}
-	if tt == UnknownToken {
-		_, n := l.r.PeekRune(0)
-		l.r.Move(n)
 	}
 	return tt, l.r.Shift()
 }

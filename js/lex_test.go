@@ -56,7 +56,7 @@ func TestTokens(t *testing.T) {
 		{"a = /.*/g;", TTs{IdentifierToken, PunctuatorToken, RegexpToken, PunctuatorToken}},
 
 		{"/*co\nm\u2028m/*ent*/ //co//mment\u2029//comment", TTs{CommentToken, CommentToken, LineTerminatorToken, CommentToken}},
-		{"$ _\u200C \\u2000 \u200C", TTs{IdentifierToken, IdentifierToken, IdentifierToken, UnknownToken}},
+		{"$ _\u200C \\u2000 \u200C", TTs{IdentifierToken, IdentifierToken, IdentifierToken, ErrorToken}},
 		{">>>=>>>>=", TTs{PunctuatorToken, PunctuatorToken, PunctuatorToken}},
 		{"1/", TTs{NumericToken, PunctuatorToken}},
 		{"1/=", TTs{NumericToken, PunctuatorToken}},
@@ -79,26 +79,26 @@ func TestTokens(t *testing.T) {
 
 		// early endings
 		{"'string", TTs{StringToken}},
-		{"'\n '\u2028", TTs{UnknownToken, LineTerminatorToken, UnknownToken, LineTerminatorToken}},
+		{"'\n '\u2028", TTs{ErrorToken}},
 		{"'str\\\U00100000ing\\0'", TTs{StringToken}},
 		{"'strin\\00g'", TTs{StringToken}},
 		{"/*comment", TTs{CommentToken}},
 		{"a=/regexp", TTs{IdentifierToken, PunctuatorToken, RegexpToken}},
-		{"\\u002", TTs{UnknownToken, IdentifierToken}},
+		{"\\u002", TTs{ErrorToken}},
 
 		// coverage
-		{"Ø a〉", TTs{IdentifierToken, IdentifierToken, UnknownToken}},
+		{"Ø a〉", TTs{IdentifierToken, IdentifierToken, ErrorToken}},
 		{"0xg 0.f", TTs{NumericToken, IdentifierToken, NumericToken, PunctuatorToken, IdentifierToken}},
 		{"0bg 0og", TTs{NumericToken, IdentifierToken, NumericToken, IdentifierToken}},
 		{"\u00A0\uFEFF\u2000", TTs{}},
 		{"\u2028\u2029", TTs{LineTerminatorToken}},
 		{"\\u0029ident", TTs{IdentifierToken}},
 		{"\\u{0029FEF}ident", TTs{IdentifierToken}},
-		{"\\u{}", TTs{UnknownToken, IdentifierToken, PunctuatorToken, PunctuatorToken}},
-		{"\\ugident", TTs{UnknownToken, IdentifierToken}},
-		{"'str\u2028ing'", TTs{UnknownToken, IdentifierToken, LineTerminatorToken, IdentifierToken, StringToken}},
-		{"a=/\\\n", TTs{IdentifierToken, PunctuatorToken, PunctuatorToken, UnknownToken, LineTerminatorToken}},
-		{"a=/x/\u200C\u3009", TTs{IdentifierToken, PunctuatorToken, RegexpToken, UnknownToken}},
+		{"\\u{}", TTs{ErrorToken}},
+		{"\\ugident", TTs{ErrorToken}},
+		{"'str\u2028ing'", TTs{ErrorToken}},
+		{"a=/\\\n", TTs{IdentifierToken, PunctuatorToken, PunctuatorToken, ErrorToken}},
+		{"a=/x/\u200C\u3009", TTs{IdentifierToken, PunctuatorToken, RegexpToken, ErrorToken}},
 		{"a=/x\n", TTs{IdentifierToken, PunctuatorToken, PunctuatorToken, IdentifierToken, LineTerminatorToken}},
 
 		{"return /abc/;", TTs{IdentifierToken, RegexpToken, PunctuatorToken}},
@@ -148,7 +148,7 @@ func TestTokens(t *testing.T) {
 		{"this.return/1/g", TTs{IdentifierToken, PunctuatorToken, IdentifierToken, PunctuatorToken, NumericToken, PunctuatorToken, IdentifierToken}},
 
 		// go fuzz
-		{"`", TTs{UnknownToken}},
+		{"`", TTs{ErrorToken}},
 	}
 
 	passed := 0
@@ -160,25 +160,24 @@ func TestTokens(t *testing.T) {
 		for {
 			token, _ := l.Next()
 			j++
-			if token == ErrorToken {
-				stringify := helperStringify(t, tt.js, j)
-				test.That(t, i == len(tt.expected), "when error occurred we must be at the end in "+stringify)
-				test.Error(t, l.Err(), io.EOF, "in "+stringify)
-				passed++
-				break
-			} else if token == WhitespaceToken {
+			if token == WhitespaceToken {
 				continue
 			}
+			expected := ErrorToken
 			if i < len(tt.expected) {
-				expected := tt.expected[i]
-				if token != expected {
-					stringify := helperStringify(t, tt.js, j)
-					test.String(t, token.String(), expected.String(), "token types must match at index "+strconv.Itoa(i)+" in "+stringify)
-					break
-				}
-			} else {
+				expected = tt.expected[i]
+			}
+			if token != expected {
 				stringify := helperStringify(t, tt.js, j)
-				test.That(t, false, "index", i, "must not exceed expected token types size", len(tt.expected), "in "+stringify)
+				test.String(t, token.String(), expected.String(), "token types must match at index "+strconv.Itoa(i)+" in "+stringify)
+				break
+			}
+			if i == len(tt.expected) {
+				stringify := helperStringify(t, tt.js, j)
+				test.Error(t, l.Err(), io.EOF, "in "+stringify)
+			}
+			if expected == ErrorToken {
+				passed++
 				break
 			}
 			i++

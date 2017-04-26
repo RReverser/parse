@@ -79,7 +79,7 @@ type Lexer struct {
 	r     *buffer.Lexer
 	stack *stack.Stack
 
-	regexpState bool
+	exprState bool
 }
 
 // NewLexer returns a new Lexer for a given io.Reader.
@@ -124,15 +124,15 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	case ')', ']':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		l.regexpState = false
+		l.exprState = false
 	case '{':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		if l.regexpState {
+		if l.exprState {
 			l.enterContext(ObjectContext)
 		} else {
 			l.enterContext(BlockContext)
-			l.regexpState = true
+			l.exprState = true
 		}
 	case '}':
 		if l.curContext() == TemplateContext && l.consumeTemplateToken() {
@@ -142,34 +142,34 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			tt = PunctuatorToken
 			switch ctx := l.leaveContext(); ctx {
 			case ObjectContext:
-				l.regexpState = false
+				l.exprState = false
 			case BlockContext:
-				l.regexpState = true
+				l.exprState = true
 			}
 		}
 	case '(', '[', ';', ',', '~', '?', ':':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		l.regexpState = true
+		l.exprState = true
 	case '<', '>', '=', '!', '+', '-', '*', '%', '&', '|', '^':
 		if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
-			l.regexpState = true
+			l.exprState = true
 		}
 	case '/':
 		if l.consumeCommentToken() {
 			return CommentToken, l.r.Shift()
-		} else if l.regexpState && l.consumeRegexpToken() {
+		} else if l.exprState && l.consumeRegexpToken() {
 			tt = RegexpToken
-			l.regexpState = false
+			l.exprState = false
 		} else if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
-			l.regexpState = true
+			l.exprState = true
 		}
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 		if l.consumeNumericToken() {
 			tt = NumericToken
-			l.regexpState = false
+			l.exprState = false
 		} else if c == '.' {
 			l.r.Move(1)
 			tt = PunctuatorToken
@@ -177,7 +177,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	case '\'', '"':
 		if l.consumeStringToken() {
 			tt = StringToken
-			l.regexpState = false
+			l.exprState = false
 		}
 	case ' ', '\t', '\v', '\f':
 		l.r.Move(1)
@@ -189,7 +189,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 		for l.consumeLineTerminator() {
 		}
 		tt = LineTerminatorToken
-		l.regexpState = true
+		l.exprState = true
 	case '`':
 		l.enterContext(TemplateContext)
 		if l.consumeTemplateToken() {
@@ -204,12 +204,12 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			case False:
 			case True:
 			case Null:
-				l.regexpState = false
+				l.exprState = false
 			default:
 				// This will include keywords that can't be followed by a regexp, but only
 				// by a specified char (like `if` or `try`), but we don't check for syntax
 				// errors as we don't attempt to parse a full JS grammar when streaming
-				l.regexpState = true
+				l.exprState = true
 			}
 		} else if c >= 0xC0 {
 			if l.consumeWhitespace() {
@@ -220,7 +220,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 				for l.consumeLineTerminator() {
 				}
 				tt = LineTerminatorToken
-				l.regexpState = true
+				l.exprState = true
 			}
 		}
 	}
@@ -587,12 +587,12 @@ func (l *Lexer) consumeTemplateToken() bool {
 		c := l.r.Peek(0)
 		if c == '`' {
 			l.leaveContext()
-			l.regexpState = false
+			l.exprState = false
 			l.r.Move(1)
 			return true
 		} else if c == '$' && l.r.Peek(1) == '{' {
 			l.r.Move(2)
-			l.regexpState = true
+			l.exprState = true
 			return true
 		} else if c == 0 {
 			l.r.Rewind(mark)

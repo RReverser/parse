@@ -91,28 +91,38 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
-	case '(', ')', '[', ']', '{', '}', ';', ',', '~', '?', ':':
+	case ')', ']', '}':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		l.regexpState = false
+	case '(', '[', '{', ';', ',', '~', '?', ':':
 		if c == '}' && l.templateState && l.consumeTemplateToken() {
 			tt = TemplateToken
+			l.regexpState = l.templateState
 		} else {
 			l.r.Move(1)
 			tt = PunctuatorToken
+			l.regexpState = true
 		}
 	case '<', '>', '=', '!', '+', '-', '*', '%', '&', '|', '^':
 		if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
+			l.regexpState = true
 		}
 	case '/':
 		if l.consumeCommentToken() {
 			return CommentToken, l.r.Shift()
 		} else if l.regexpState && l.consumeRegexpToken() {
 			tt = RegexpToken
+			l.regexpState = false
 		} else if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
+			l.regexpState = true
 		}
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 		if l.consumeNumericToken() {
 			tt = NumericToken
+			l.regexpState = false
 		} else if c == '.' {
 			l.r.Move(1)
 			tt = PunctuatorToken
@@ -120,6 +130,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	case '\'', '"':
 		if l.consumeStringToken() {
 			tt = StringToken
+			l.regexpState = false
 		}
 	case ' ', '\t', '\v', '\f':
 		l.r.Move(1)
@@ -131,14 +142,29 @@ func (l *Lexer) Next() (TokenType, []byte) {
 		for l.consumeLineTerminator() {
 		}
 		tt = LineTerminatorToken
+		l.regexpState = true
 	case '`':
 		l.templateState = true
 		if l.consumeTemplateToken() {
 			tt = TemplateToken
+			l.regexpState = l.templateState
 		}
 	default:
 		if l.consumeIdentifierToken() {
 			tt = IdentifierToken
+			switch hash := ToHash(l.r.Lexeme()); hash {
+			case 0: // Custom identifier
+			case This:
+			case False:
+			case True:
+			case Null:
+				l.regexpState = false
+			default:
+				// This will include keywords that can't be followed by a regexp, but only
+				// by a specified char (like `if` or `try`), but we don't check for syntax
+				// errors as we don't attempt to parse a full JS grammar when streaming
+				l.regexpState = true
+			}
 		} else if c >= 0xC0 {
 			if l.consumeWhitespace() {
 				for l.consumeWhitespace() {
@@ -148,33 +174,15 @@ func (l *Lexer) Next() (TokenType, []byte) {
 				for l.consumeLineTerminator() {
 				}
 				tt = LineTerminatorToken
+				l.regexpState = true
 			}
 		}
 	}
 
-	// differentiate between divisor and regexp state, because the '/' character is ambiguous!
-	// WhitespaceToken and CommentToken are already returned
-	if tt == LineTerminatorToken || tt == PunctuatorToken && regexpStateByte[c] {
-		l.regexpState = true
-	} else if tt == IdentifierToken {
-		switch hash := ToHash(l.r.Lexeme()); hash {
-		case 0: // Custom identifier
-		case This:
-		case False:
-		case True:
-		case Null:
-			l.regexpState = false
-		default:
-			// This will include keywords that can't be followed by a regexp, but only
-			// by a specified char (like `if` or `try`), but we don't check for syntax
-			// errors as we don't attempt to parse a full JS grammar when streaming
-			l.regexpState = true
-		}
-	} else if tt == ErrorToken {
+	if tt == ErrorToken {
 		return ErrorToken, nil
-	} else {
-		l.regexpState = false
 	}
+
 	return tt, l.r.Shift()
 }
 

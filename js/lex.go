@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"unicode"
 
+	"github.com/golang-collections/collections/stack"
 	"github.com/tdewolff/buffer"
 )
 
@@ -30,6 +31,18 @@ const (
 	StringToken
 	RegexpToken
 	TemplateToken
+)
+
+// ParsingContext determines the context in which following token should be parsed.
+// This affects parsing regular expressions and template literals.
+type ParsingContext uint32
+
+// ParsingContext values
+const (
+	GlobalContext ParsingContext = iota
+	BlockContext
+	ObjectContext
+	TemplateContext
 )
 
 // String returns the string representation of a TokenType.
@@ -63,16 +76,17 @@ func (tt TokenType) String() string {
 
 // Lexer is the state for the lexer.
 type Lexer struct {
-	r *buffer.Lexer
+	r     *buffer.Lexer
+	stack *stack.Stack
 
-	regexpState   bool
-	templateState bool
+	regexpState bool
 }
 
 // NewLexer returns a new Lexer for a given io.Reader.
 func NewLexer(r io.Reader) *Lexer {
 	return &Lexer{
-		r: buffer.NewLexer(r),
+		r:     buffer.NewLexer(r),
+		stack: stack.New(),
 	}
 }
 
@@ -86,24 +100,57 @@ func (l *Lexer) Free(n int) {
 	l.r.Free(n)
 }
 
+func (l *Lexer) enterContext(context ParsingContext) {
+	l.stack.Push(context)
+}
+
+func (l *Lexer) leaveContext() ParsingContext {
+	ctx := l.stack.Pop()
+	if ctx == nil {
+		return GlobalContext
+	}
+	return ctx.(ParsingContext)
+}
+
+func (l *Lexer) curContext() ParsingContext {
+	return l.stack.Peek().(ParsingContext)
+}
+
 // Next returns the next Token. It returns ErrorToken when an error was encountered. Using Err() one can retrieve the error message.
 func (l *Lexer) Next() (TokenType, []byte) {
 	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
-	case ')', ']', '}':
+	case ')', ']':
 		l.r.Move(1)
 		tt = PunctuatorToken
 		l.regexpState = false
-	case '(', '[', '{', ';', ',', '~', '?', ':':
-		if c == '}' && l.templateState && l.consumeTemplateToken() {
+	case '{':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		if l.regexpState {
+			l.enterContext(ObjectContext)
+		} else {
+			l.enterContext(BlockContext)
+			l.regexpState = true
+		}
+	case '}':
+		if l.curContext() == TemplateContext && l.consumeTemplateToken() {
 			tt = TemplateToken
-			l.regexpState = l.templateState
 		} else {
 			l.r.Move(1)
 			tt = PunctuatorToken
-			l.regexpState = true
+			switch ctx := l.leaveContext(); ctx {
+			case ObjectContext:
+				l.regexpState = false
+			case BlockContext:
+				l.regexpState = true
+			}
 		}
+	case '(', '[', ';', ',', '~', '?', ':':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		l.regexpState = true
 	case '<', '>', '=', '!', '+', '-', '*', '%', '&', '|', '^':
 		if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
@@ -144,10 +191,9 @@ func (l *Lexer) Next() (TokenType, []byte) {
 		tt = LineTerminatorToken
 		l.regexpState = true
 	case '`':
-		l.templateState = true
+		l.enterContext(TemplateContext)
 		if l.consumeTemplateToken() {
 			tt = TemplateToken
-			l.regexpState = l.templateState
 		}
 	default:
 		if l.consumeIdentifierToken() {
@@ -540,11 +586,13 @@ func (l *Lexer) consumeTemplateToken() bool {
 	for {
 		c := l.r.Peek(0)
 		if c == '`' {
-			l.templateState = false
+			l.leaveContext()
+			l.regexpState = false
 			l.r.Move(1)
 			return true
 		} else if c == '$' && l.r.Peek(1) == '{' {
 			l.r.Move(2)
+			l.regexpState = true
 			return true
 		} else if c == 0 {
 			l.r.Rewind(mark)

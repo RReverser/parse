@@ -43,6 +43,8 @@ const (
 	BlockContext
 	ObjectContext
 	TemplateContext
+	StmtParensContext
+	ExprParensContext
 )
 
 // String returns the string representation of a TokenType.
@@ -121,7 +123,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
-	case ')', ']':
+	case ']':
 		l.r.Move(1)
 		tt = PunctuatorToken
 		l.exprState = false
@@ -147,7 +149,25 @@ func (l *Lexer) Next() (TokenType, []byte) {
 				l.exprState = true
 			}
 		}
-	case '(', '[', ';', ',', '~', '?', ':':
+	case '(':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		if l.exprState {
+			l.enterContext(ExprParensContext)
+		} else {
+			l.enterContext(StmtParensContext)
+			l.exprState = true
+		}
+	case ')':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		switch ctx := l.leaveContext(); ctx {
+		case ExprParensContext:
+			l.exprState = false
+		case StmtParensContext:
+			l.exprState = true
+		}
+	case '[', ';', ',', '~', '?', ':':
 		l.r.Move(1)
 		tt = PunctuatorToken
 		l.exprState = true
@@ -204,6 +224,15 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			case False:
 			case True:
 			case Null:
+			case If:
+			case While:
+			case For:
+			case With:
+			case Export:
+			case Finally:
+			case Function:
+			case Switch:
+			case Else:
 				l.exprState = false
 			default:
 				// This will include keywords that can't be followed by a regexp, but only

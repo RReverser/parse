@@ -45,6 +45,22 @@ const (
 	TemplateContext
 	StmtParensContext
 	ExprParensContext
+	FuncExprParensContext
+	FuncExprBodyContext
+)
+
+// ParsingState determines the state in which the following token should be parsed.
+type ParsingState uint32
+
+// ParsingState values
+const (
+	StmtState ParsingState = iota
+	ExprState
+	ExprSubscriptState
+	PropNameState
+	FuncExprArgsState
+	FuncStmtArgsState
+	FuncExprBodyState
 )
 
 // String returns the string representation of a TokenType.
@@ -80,8 +96,7 @@ func (tt TokenType) String() string {
 type Lexer struct {
 	r     *buffer.Lexer
 	stack *stack.Stack
-
-	exprState bool
+	state ParsingState
 }
 
 // NewLexer returns a new Lexer for a given io.Reader.
@@ -89,6 +104,7 @@ func NewLexer(r io.Reader) *Lexer {
 	return &Lexer{
 		r:     buffer.NewLexer(r),
 		stack: stack.New(),
+		state: StmtState,
 	}
 }
 
@@ -123,18 +139,20 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
-	case ']':
-		l.r.Move(1)
-		tt = PunctuatorToken
-		l.exprState = false
 	case '{':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		if l.exprState {
+		switch l.state {
+		case ExprState:
 			l.enterContext(ObjectContext)
-		} else {
+		case StmtState, ExprSubscriptState:
 			l.enterContext(BlockContext)
-			l.exprState = true
+			l.state = StmtState
+		case FuncExprBodyState:
+			l.enterContext(FuncExprBodyContext)
+			l.state = StmtState
+		default:
+			tt = ErrorToken
 		}
 	case '}':
 		if l.curContext() == TemplateContext && l.consumeTemplateToken() {
@@ -143,61 +161,87 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			l.r.Move(1)
 			tt = PunctuatorToken
 			switch ctx := l.leaveContext(); ctx {
-			case ObjectContext:
-				l.exprState = false
+			case ObjectContext, FuncExprBodyContext:
+				l.state = ExprSubscriptState
 			case BlockContext:
-				l.exprState = true
+				l.state = StmtState
+			default:
+				tt = ErrorToken
 			}
 		}
 	case '(':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		if l.exprState {
-			l.enterContext(ExprParensContext)
-		} else {
+		switch l.state {
+		case FuncExprArgsState:
+			l.enterContext(FuncExprParensContext)
+			l.state = ExprState
+		case StmtState, FuncStmtArgsState:
 			l.enterContext(StmtParensContext)
-			l.exprState = true
+			l.state = ExprState
+		case ExprState, ExprSubscriptState:
+			l.enterContext(ExprParensContext)
+			l.state = ExprState
+		default:
+			tt = ErrorToken
 		}
 	case ')':
 		l.r.Move(1)
 		tt = PunctuatorToken
 		switch ctx := l.leaveContext(); ctx {
-		case ExprParensContext:
-			l.exprState = false
 		case StmtParensContext:
-			l.exprState = true
+			l.state = StmtState
+		case ExprParensContext:
+			l.state = ExprSubscriptState
+		case FuncExprParensContext:
+			l.state = FuncExprBodyState
+		default:
+			tt = ErrorToken
 		}
-	case '[', ';', ',', '~', '?', ':':
+	case '[':
 		l.r.Move(1)
 		tt = PunctuatorToken
-		l.exprState = true
+		l.state = ExprState
+	case ']':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		l.state = ExprSubscriptState
+	case ',', '~', '?', ':':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		l.state = ExprState
+	case ';':
+		l.r.Move(1)
+		tt = PunctuatorToken
+		l.state = StmtState
 	case '<', '>', '=', '!', '+', '-', '*', '%', '&', '|', '^':
 		if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
-			l.exprState = true
+			l.state = ExprState
 		}
 	case '/':
 		if l.consumeCommentToken() {
 			return CommentToken, l.r.Shift()
-		} else if l.exprState && l.consumeRegexpToken() {
+		} else if l.state != ExprSubscriptState && l.consumeRegexpToken() {
 			tt = RegexpToken
-			l.exprState = false
+			l.state = ExprSubscriptState
 		} else if l.consumeLongPunctuatorToken() {
 			tt = PunctuatorToken
-			l.exprState = true
+			l.state = ExprState
 		}
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 		if l.consumeNumericToken() {
 			tt = NumericToken
-			l.exprState = false
+			l.state = ExprSubscriptState
 		} else if c == '.' {
 			l.r.Move(1)
 			tt = PunctuatorToken
+			l.state = PropNameState
 		}
 	case '\'', '"':
 		if l.consumeStringToken() {
 			tt = StringToken
-			l.exprState = false
+			l.state = ExprSubscriptState
 		}
 	case ' ', '\t', '\v', '\f':
 		l.r.Move(1)
@@ -209,7 +253,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 		for l.consumeLineTerminator() {
 		}
 		tt = LineTerminatorToken
-		l.exprState = true
+		l.state = StmtState
 	case '`':
 		l.enterContext(TemplateContext)
 		if l.consumeTemplateToken() {
@@ -218,27 +262,56 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	default:
 		if l.consumeIdentifierToken() {
 			tt = IdentifierToken
-			switch hash := ToHash(l.r.Lexeme()); hash {
-			case 0: // Custom identifier
-			case This:
-			case False:
-			case True:
-			case Null:
-			case If:
-			case While:
-			case For:
-			case With:
-			case Export:
-			case Finally:
-			case Function:
-			case Switch:
-			case Else:
-				l.exprState = false
-			default:
-				// This will include keywords that can't be followed by a regexp, but only
-				// by a specified char (like `if` or `try`), but we don't check for syntax
-				// errors as we don't attempt to parse a full JS grammar when streaming
-				l.exprState = true
+			if l.state != PropNameState {
+				switch hash := ToHash(l.r.Lexeme()); hash {
+				case 0:
+					if l.state != FuncExprArgsState && l.state != FuncStmtArgsState {
+						l.state = ExprSubscriptState
+					}
+				case This, False, True, Null, Super:
+					l.state = ExprSubscriptState
+				case Break, Catch, Const, Continue, Debugger, Default, Do, Else, Export, Finally, For, If, Let, Static, Switch, Try, Var, While, With:
+					if l.state != StmtState {
+						tt = ErrorToken
+					}
+				case Case, Throw:
+					if l.state != StmtState {
+						tt = ErrorToken
+					} else {
+						l.state = ExprState
+					}
+				case Class, Function:
+					if l.state == ExprState {
+						l.state = FuncExprArgsState
+					} else {
+						l.state = FuncStmtArgsState
+					}
+				case Import:
+					if l.state == ExprState {
+						// to support future import(...).then(...)
+						l.state = ExprSubscriptState
+					} else {
+						l.state = StmtState
+					}
+				case In, Instanceof:
+					if l.state == ExprSubscriptState {
+						l.state = ExprState
+					} else {
+						tt = ErrorToken
+					}
+				case Extends:
+					if l.state != FuncExprArgsState && l.state != FuncStmtArgsState {
+						tt = ErrorToken
+					} else {
+						l.state = ExprState
+					}
+				case Delete, New, Return, Typeof, Void, Yield:
+					l.state = ExprState
+				default:
+					tt = ErrorToken
+				}
+			} else {
+				l.state = ExprSubscriptState
 			}
 		} else if c >= 0xC0 {
 			if l.consumeWhitespace() {
@@ -249,7 +322,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 				for l.consumeLineTerminator() {
 				}
 				tt = LineTerminatorToken
-				l.exprState = true
+				l.state = StmtState
 			}
 		}
 	}
@@ -616,12 +689,12 @@ func (l *Lexer) consumeTemplateToken() bool {
 		c := l.r.Peek(0)
 		if c == '`' {
 			l.leaveContext()
-			l.exprState = false
+			l.state = ExprSubscriptState
 			l.r.Move(1)
 			return true
 		} else if c == '$' && l.r.Peek(1) == '{' {
 			l.r.Move(2)
-			l.exprState = true
+			l.state = ExprState
 			return true
 		} else if c == 0 {
 			l.r.Rewind(mark)

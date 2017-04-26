@@ -2,6 +2,7 @@
 package js // import "github.com/tdewolff/parse/js"
 
 import (
+	"errors"
 	"io"
 	"strconv"
 	"unicode"
@@ -97,6 +98,7 @@ type Lexer struct {
 	r     *buffer.Lexer
 	stack *stack.Stack
 	state ParsingState
+	err   bool
 }
 
 // NewLexer returns a new Lexer for a given io.Reader.
@@ -105,12 +107,17 @@ func NewLexer(r io.Reader) *Lexer {
 		r:     buffer.NewLexer(r),
 		stack: stack.New(),
 		state: StmtState,
+		err:   false,
 	}
 }
 
 // Err returns the error encountered during lexing, this is often io.EOF but also other errors can be returned.
 func (l *Lexer) Err() error {
-	return l.r.Err()
+	r := l.r.Err()
+	if r == nil && l.err {
+		r = errors.New("Lexing error")
+	}
+	return r
 }
 
 // Free frees up bytes of length n from previously shifted tokens.
@@ -131,11 +138,19 @@ func (l *Lexer) leaveContext() ParsingContext {
 }
 
 func (l *Lexer) curContext() ParsingContext {
-	return l.stack.Peek().(ParsingContext)
+	ctx := l.stack.Peek()
+	if ctx == nil {
+		return GlobalContext
+	}
+	return ctx.(ParsingContext)
 }
 
 // Next returns the next Token. It returns ErrorToken when an error was encountered. Using Err() one can retrieve the error message.
 func (l *Lexer) Next() (TokenType, []byte) {
+	if l.err {
+		return ErrorToken, nil
+	}
+
 	tt := ErrorToken
 	c := l.r.Peek(0)
 	switch c {
@@ -328,6 +343,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 	}
 
 	if tt == ErrorToken {
+		l.err = true
 		return ErrorToken, nil
 	}
 

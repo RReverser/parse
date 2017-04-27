@@ -146,6 +146,7 @@ func TestTokens(t *testing.T) {
 		{"case function (){}/1/g:", TTs{IdentifierToken, IdentifierToken, PunctuatorToken, PunctuatorToken, PunctuatorToken, PunctuatorToken, PunctuatorToken, NumericToken, PunctuatorToken, IdentifierToken, PunctuatorToken}},
 		{"export default function (){}/1/g", TTs{IdentifierToken, IdentifierToken, IdentifierToken, PunctuatorToken, PunctuatorToken, PunctuatorToken, PunctuatorToken, RegexpToken}},
 		{"this.return/1/g", TTs{IdentifierToken, PunctuatorToken, IdentifierToken, PunctuatorToken, NumericToken, PunctuatorToken, IdentifierToken}},
+		{"(a+b)/1/g", TTs{PunctuatorToken, IdentifierToken, PunctuatorToken, IdentifierToken, PunctuatorToken, PunctuatorToken, NumericToken, PunctuatorToken, IdentifierToken}},
 
 		// go fuzz
 		{"`", TTs{ErrorToken}},

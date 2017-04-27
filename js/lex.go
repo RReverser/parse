@@ -60,8 +60,8 @@ const (
 	ExprSubscriptState
 	PropNameState
 	FuncExprArgsState
-	FuncStmtArgsState
 	FuncExprBodyState
+	StmtArgsState
 )
 
 // String returns the string representation of a TokenType.
@@ -191,10 +191,10 @@ func (l *Lexer) Next() (TokenType, []byte) {
 		case FuncExprArgsState:
 			l.enterContext(FuncExprParensContext)
 			l.state = ExprState
-		case StmtState, FuncStmtArgsState:
+		case StmtArgsState:
 			l.enterContext(StmtParensContext)
 			l.state = ExprState
-		case ExprState, ExprSubscriptState:
+		case StmtState, ExprState, ExprSubscriptState:
 			l.enterContext(ExprParensContext)
 			l.state = ExprState
 		default:
@@ -280,13 +280,19 @@ func (l *Lexer) Next() (TokenType, []byte) {
 			if l.state != PropNameState {
 				switch hash := ToHash(l.r.Lexeme()); hash {
 				case 0:
-					if l.state != FuncExprArgsState && l.state != FuncStmtArgsState {
+					if l.state != FuncExprArgsState && l.state != StmtArgsState {
 						l.state = ExprSubscriptState
 					}
 				case This, False, True, Null, Super:
 					l.state = ExprSubscriptState
-				case Break, Catch, Const, Continue, Debugger, Default, Do, Else, Export, Finally, For, If, Let, Static, Switch, Try, Var, While, With:
+				case Break, Const, Continue, Debugger, Default, Do, Else, Export, Finally, Let, Static, Try, Var:
 					if l.state != StmtState {
+						tt = ErrorToken
+					}
+				case Catch, For, If, Switch, While, With:
+					if l.state == StmtState {
+						l.state = StmtArgsState
+					} else {
 						tt = ErrorToken
 					}
 				case Case, Throw:
@@ -299,7 +305,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 					if l.state == ExprState {
 						l.state = FuncExprArgsState
 					} else {
-						l.state = FuncStmtArgsState
+						l.state = StmtArgsState
 					}
 				case Import:
 					if l.state == ExprState {
@@ -315,7 +321,7 @@ func (l *Lexer) Next() (TokenType, []byte) {
 						tt = ErrorToken
 					}
 				case Extends:
-					if l.state != FuncExprArgsState && l.state != FuncStmtArgsState {
+					if l.state != FuncExprArgsState && l.state != StmtArgsState {
 						tt = ErrorToken
 					} else {
 						l.state = ExprState
